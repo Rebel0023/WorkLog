@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
+    <!-- 讓「加入主畫面」後更接近原生 App 的體驗 -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="mobile-web-app-capable" content="yes">
+    <title>Gemini 智能工作日誌</title>
+    <!-- 修正：原本的 https://jsdelivr.net 不是有效的 CSS 檔案，改用官方 Tailwind Play CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>body { font-family: -apple-system, BlinkMacSystemFont, "PingFang TC", "Microsoft JhengHei", sans-serif; }</style>
+</head>
+<body class="bg-gray-100 min-h-screen flex flex-col justify-between p-4 md:p-8">
+
+    <div class="max-w-xl w-full mx-auto bg-white rounded-2xl shadow-xl p-6 flex-1 flex flex-col justify-between">
+        <h1 class="text-2xl font-bold text-gray-800 text-center mb-6">📝 智能工作日誌同步器</h1>
+
+        <!-- 語音即時顯示 -->
+        <div class="bg-gray-50 border border-gray-200 rounded-xl p-4 overflow-y-auto min-h-[120px] mb-4">
+            <p id="transcribedText" class="text-gray-400 leading-relaxed text-sm">
+                輕觸下方麥克風開始說話，例如：「今天二樓大廳的冷氣不冷會滴水，後來清洗濾網並補灌冷媒後就恢復正常了」
+            </p>
+        </div>
+
+        <!-- Gemini 智慧分類結果預覽區 -->
+        <div id="aiResultArea" class="hidden space-y-3 mb-6 bg-blue-50 border border-blue-200 rounded-xl p-4">
+            <h3 class="text-sm font-bold text-blue-800 flex items-center gap-1">✨ 試算表欄位寫入預覽 (系統已自動帶入當日日期與項次)</h3>
+            <div>
+                <span class="text-xs font-semibold px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full">📌 事項 (任務摘要 / 故障現象)</span>
+                <p id="previewIssue" class="text-sm text-gray-700 mt-1 font-medium">-</p>
+            </div>
+            <div>
+                <span class="text-xs font-semibold px-2 py-0.5 bg-green-100 text-green-700 rounded-full">🔧 工作內容 (實際處置 / 維修進度)</span>
+                <p id="previewAction" class="text-sm text-gray-700 mt-1 font-medium">-</p>
+            </div>
+        </div>
+
+        <!-- 同步按鈕 -->
+        <button id="uploadBtn" class="hidden w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-3 px-4 rounded-xl shadow-md transition duration-200 mb-6 flex items-center justify-center gap-2 disabled:bg-gray-400">
+            <span id="uploadText">同步至 Google 試算表</span>
+        </button>
+
+        <!-- 麥克風控制 -->
+        <div class="text-center">
+            <button id="micBtn" class="w-20 h-20 bg-blue-600 hover:bg-blue-700 text-white rounded-full flex items-center justify-center shadow-lg transition duration-200 mx-auto focus:outline-none">
+                <svg id="micIcon" class="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path></svg>
+            </button>
+            <p id="statusText" class="text-xs text-gray-500 mt-3 font-medium">點擊按鈕開始語音記錄</p>
+        </div>
+    </div>
+
+    <script>
+        // ================= 設定專區 =================
+        const GAS_URL = "您的GAS網址";
+        const GEMINI_API_KEY = "您的Gemini金鑰";
+        // 使用 gemini-2.5-flash：速度快、成本低，且支援中文與強制 JSON 輸出
+        const GEMINI_MODEL = "gemini-2.5-flash";
+        // ⚠️ 安全性提醒：這個金鑰會出現在網頁原始碼中，任何看得到網址的人都能複製走去使用你的免費額度。
+        // 如果之後要對外公開分享（不只自己用），建議改成把 Gemini 呼叫也搬到 Apps Script 後端代理，
+        // 前端就不用直接持有金鑰了。
+        // ============================================
+
+        const micBtn = document.getElementById('micBtn');
+        const statusText = document.getElementById('statusText');
+        const transcribedText = document.getElementById('transcribedText');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const uploadText = document.getElementById('uploadText');
+        const aiResultArea = document.getElementById('aiResultArea');
+        const previewIssue = document.getElementById('previewIssue');
+        const previewAction = document.getElementById('previewAction');
+
+        let isRecording = false;
+        let finalTranscript = '';
+        let recognition;
+        let classifiedResult = { issue: '', action: '' };
+
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+        if (SpeechRecognition) {
+            recognition = new SpeechRecognition();
+            recognition.continuous = true;
+            recognition.interimResults = true;
+            recognition.lang = 'zh-TW';
+
+            recognition.onresult = (event) => {
+                let interimTranscript = '';
+                for (let i = event.resultIndex; i < event.results.length; ++i) {
+                    if (event.results[i].isFinal) {
+                        finalTranscript += event.results[i].transcript;
+                    } else {
+                        interimTranscript += event.results[i].transcript;
+                    }
+                }
+                const displayResult = finalTranscript + interimTranscript;
+                if (displayResult.trim() !== '') {
+                    transcribedText.innerText = displayResult;
+                    transcribedText.classList.remove('text-gray-400');
+                    transcribedText.classList.add('text-gray-800');
+                }
+            };
+
+            // 新增：iOS Safari 上 continuous 模式偶爾會卡住或無預警中斷，
+            // 加上 onerror / onend 讓按鈕狀態不會卡在「錄音中」。
+            recognition.onerror = (event) => {
+                console.error('語音辨識錯誤:', event.error);
+                if (isRecording) {
+                    statusText.innerText = "語音辨識發生問題（" + event.error + "），請再試一次";
+                    resetMicUI();
+                }
+            };
+
+            recognition.onend = () => {
+                // 有些瀏覽器（尤其 iOS Safari）在沒有明確呼叫 stop() 時也會自動結束辨識，
+                // 這裡確保按鈕狀態能正確歸位，避免看起來像「錄音中」但其實已經停止。
+                if (isRecording) {
+                    isRecording = false;
+                    resetMicUI();
+                    const rawText = transcribedText.innerText.trim();
+                    if (rawText && !rawText.startsWith('正在')) {
+                        analyzeTextWithGemini(rawText);
+                    }
+                }
+            };
+        } else {
+            statusText.innerText = "此瀏覽器不支援語音辨識，請改用 Chrome 或桌機 Safari 14.1+";
+            micBtn.disabled = true;
+            micBtn.classList.add('opacity-40');
+        }
+
+        micBtn.addEventListener('click', () => {
+            if (!recognition) return;
+            isRecording ? stopRecording() : startRecording();
+        });
+
+        function resetMicUI() {
+            micBtn.classList.remove('bg-red-600');
+            micBtn.classList.add('bg-blue-600');
+            statusText.innerText = "點擊按鈕開始語音記錄";
+        }
+
+        function startRecording() {
+            isRecording = true;
+            finalTranscript = '';
+            transcribedText.innerText = '正在聆聽並辨識中...';
+            transcribedText.classList.add('text-gray-400');
+            micBtn.classList.replace('bg-blue-600', 'bg-red-600');
+            statusText.innerText = "正在聆聽中... 點擊停止並讓 AI 分類";
+            uploadBtn.classList.add('hidden');
+            aiResultArea.classList.add('hidden');
+            try {
+                recognition.start();
+            } catch (err) {
+                console.error(err);
+                isRecording = false;
+                resetMicUI();
+            }
+        }
+
+        async function stopRecording() {
+            isRecording = false;
+            resetMicUI();
+            if (recognition) recognition.stop();
+
+            const rawText = transcribedText.innerText.trim();
+            if (rawText && !rawText.startsWith('正在')) {
+                await analyzeTextWithGemini(rawText);
+            }
+        }
+
+        async function analyzeTextWithGemini(text) {
+            statusText.innerText = "🤖 Gemini 正在精煉並歸納工作欄位...";
+
+            // 修正：原本的網址缺少主機名稱與正確路徑，導致 fetch 一定失敗
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+
+            const prompt = `你是一個專業的工作日誌秘書。請分析使用者的口述內容，將其精煉並歸納為『事項』與『工作內容』兩個欄位。\n『事項』填寫：交辦的核心問題、故障現象、或任務名稱（需精簡摘要）。\n『工作內容』填寫：實際維修執行的處置、解決手法或對策。\n必須嚴格以 JSON 格式回傳，不可附帶任何 Markdown 標記，格式為：{"issue": "事項內容", "action": "工作內容"}。使用者口述如下：\n${text}`;
+
+            try {
+                const response = await fetch(url, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        contents: [{ parts: [{ text: prompt }] }],
+                        generationConfig: { responseMimeType: "application/json" }
+                    })
+                });
+
+                if (!response.ok) {
+                    const errBody = await response.text();
+                    throw new Error(`Gemini API 回傳錯誤 (${response.status}): ${errBody}`);
+                }
+
+                const data = await response.json();
+
+                // 修正：原本少了陣列索引 [0]，永遠讀不到資料
+                const rawJsonText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (!rawJsonText) {
+                    throw new Error("Gemini 未回傳有效內容，可能被安全過濾器擋下");
+                }
+
+                const resultJson = JSON.parse(rawJsonText.trim());
+
+                classifiedResult.issue = resultJson.issue || text;
+                classifiedResult.action = resultJson.action || "請手動補充調整";
+                previewIssue.innerText = classifiedResult.issue;
+                previewAction.innerText = classifiedResult.action;
+
+                statusText.innerText = "歸納完成！確認後即可同步";
+                aiResultArea.classList.remove('hidden');
+                uploadBtn.classList.remove('hidden');
+            } catch (error) {
+                console.error(error);
+                statusText.innerText = "AI 分析失敗，將直接寫入原始語音內容";
+                classifiedResult.issue = text;
+                classifiedResult.action = "請手動補充調整";
+                previewIssue.innerText = classifiedResult.issue;
+                previewAction.innerText = classifiedResult.action;
+                aiResultArea.classList.remove('hidden');
+                uploadBtn.classList.remove('hidden');
+            }
+        }
+
+        uploadBtn.addEventListener('click', async () => {
+            uploadBtn.disabled = true;
+            uploadText.innerText = "正在同步至雲端...";
+            try {
+                // 注意：mode: 'no-cors' 代表前端無法讀取 GAS 的實際回應內容（包含成功或失敗）。
+                // 若要確認資料是否真的寫入，仍建議偶爾打開 Google 試算表核對，
+                // 或至 Apps Script 後台的「執行項目」紀錄查看是否有錯誤。
+                await fetch(GAS_URL, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ issue: classifiedResult.issue, action: classifiedResult.action })
+                });
+                alert("🎉 已送出至試算表！（若要確認寫入結果，請打開試算表核對）");
+                transcribedText.innerText = "點擊下方麥克風開始說話...";
+                transcribedText.classList.add('text-gray-400');
+                uploadBtn.classList.add('hidden');
+                aiResultArea.classList.add('hidden');
+            } catch (error) {
+                console.error(error);
+                alert("同步失敗，請檢查 GAS_URL 設定與網路連線。");
+            } finally {
+                uploadBtn.disabled = false;
+                uploadText.innerText = "同步至 Google 試算表";
+                statusText.innerText = "點擊按鈕開始語音記錄";
+            }
+        });
+    </script>
+</body>
+</html>
