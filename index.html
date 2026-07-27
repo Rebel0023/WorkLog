@@ -87,10 +87,13 @@
             recognition.onresult = (event) => {
                 let interimTranscript = '';
                 for (let i = event.resultIndex; i < event.results.length; ++i) {
+                    // 修正：event.results[i] 只是候選結果的容器，
+                    // 真正的文字在第一個候選 event.results[i][0].transcript，
+                    // 原本少了 [0] 導致讀到 undefined 並被顯示出來。
                     if (event.results[i].isFinal) {
-                        finalTranscript += event.results[i].transcript;
+                        finalTranscript += event.results[i][0].transcript;
                     } else {
-                        interimTranscript += event.results[i].transcript;
+                        interimTranscript += event.results[i][0].transcript;
                     }
                 }
                 const displayResult = finalTranscript + interimTranscript;
