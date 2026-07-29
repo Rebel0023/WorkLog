@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gemini 連線測試</title>
+<style>
+  body { font-family: -apple-system, sans-serif; padding: 20px; background:#f5f5f5; }
+  textarea { width:100%; box-sizing:border-box; padding:10px; font-size:14px; border-radius:8px; border:1px solid #ccc; }
+  button { width:100%; padding:14px; margin-top:12px; font-size:16px; border:0; border-radius:8px; background:#2563eb; color:#fff; }
+  button:disabled { background:#999; }
+  #result { margin-top:16px; padding:12px; background:#fff; border-radius:8px; white-space:pre-wrap; word-break:break-all; font-size:13px; line-height:1.6; min-height:60px; border:1px solid #ddd; }
+  .ok { color:#059669; font-weight:bold; }
+  .err { color:#dc2626; font-weight:bold; }
+</style>
+</head>
+<body>
+  <h2>🔧 Gemini API 連線測試</h2>
+  <p style="font-size:13px;color:#666">這個頁面只做一件事：直接呼叫 Gemini API，並把「完整的原始回應或錯誤」顯示出來，方便判斷問題出在金鑰、網路，還是別的地方。</p>
+
+  <label style="font-size:13px;color:#333">API Key</label>
+  <textarea id="key" rows="2" placeholder="貼上你的 GEMINI_API_KEY"></textarea>
+
+  <label style="font-size:13px;color:#333">模型名稱</label>
+  <textarea id="model" rows="1">gemini-3-flash-preview</textarea>
+
+  <button id="btn" onclick="runTest()">測試原生端點 (?key=)</button>
+  <button id="btn2" onclick="runTestOpenAI()" style="background:#7c3aed">測試 OpenAI 相容端點 (Bearer)</button>
+
+  <div id="result">尚未測試</div>
+
+<script>
+async function runTest() {
+  const btn = document.getElementById('btn');
+  const resultEl = document.getElementById('result');
+  const key = document.getElementById('key').value.trim();
+  const model = document.getElementById('model').value.trim();
+
+  if (!key) { resultEl.innerHTML = '<span class="err">請先貼上 API Key</span>'; return; }
+
+  btn.disabled = true;
+  resultEl.textContent = '測試中，請稍候...';
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+
+  try {
+    const startTime = Date.now();
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: '請用一句話回覆：測試成功' }] }]
+      })
+    });
+    const elapsed = Date.now() - startTime;
+    const bodyText = await response.text();
+
+    let display = `狀態碼: ${response.status} ${response.statusText}\n耗時: ${elapsed}ms\n\n原始回應內容:\n${bodyText}`;
+
+    if (response.ok) {
+      resultEl.innerHTML = '<span class="ok">✅ 連線成功</span>\n\n' + display;
+    } else {
+      resultEl.innerHTML = '<span class="err">❌ Gemini 回傳錯誤</span>\n\n' + display;
+    }
+  } catch (err) {
+    resultEl.innerHTML = '<span class="err">❌ 連網路層級的錯誤（fetch 本身失敗）</span>\n\n' +
+      '錯誤訊息: ' + err.message + '\n\n' +
+      '這通常代表：網路被擋（例如內容限制、VPN、Wi-Fi 防火牆），或裝置完全連不到 googleapis.com。';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function runTestOpenAI() {
+  const btn2 = document.getElementById('btn2');
+  const resultEl = document.getElementById('result');
+  const key = document.getElementById('key').value.trim();
+  const model = document.getElementById('model').value.trim();
+
+  if (!key) { resultEl.innerHTML = '<span class="err">請先貼上 API Key</span>'; return; }
+
+  btn2.disabled = true;
+  resultEl.textContent = '測試中（OpenAI 相容端點），請稍候...';
+
+  const url = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
+
+  try {
+    const startTime = Date.now();
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + key
+      },
+      body: JSON.stringify({
+        model: model,
+        messages: [{ role: 'user', content: '請用一句話回覆：測試成功' }]
+      })
+    });
+    const elapsed = Date.now() - startTime;
+    const bodyText = await response.text();
+
+    let display = `狀態碼: ${response.status} ${response.statusText}\n耗時: ${elapsed}ms\n\n原始回應內容:\n${bodyText}`;
+
+    if (response.ok) {
+      resultEl.innerHTML = '<span class="ok">✅ OpenAI 相容端點連線成功</span>\n\n' + display;
+    } else {
+      resultEl.innerHTML = '<span class="err">❌ OpenAI 相容端點也回傳錯誤</span>\n\n' + display;
+    }
+  } catch (err) {
+    resultEl.innerHTML = '<span class="err">❌ 網路層級的錯誤（fetch 本身失敗）</span>\n\n錯誤訊息: ' + err.message;
+  } finally {
+    btn2.disabled = false;
+  }
+}
+</script>
+</body>
+</html>
